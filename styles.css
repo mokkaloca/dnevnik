@@ -125,6 +125,7 @@ a { color: var(--accent); text-underline-offset: 3px; }
 }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .warn { background: var(--warn-bg); }
+.update { max-width: 688px; margin: calc(12px + env(safe-area-inset-top)) auto 0; }
 .status { min-height: 1.5em; }
 
 /* Лента */

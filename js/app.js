@@ -275,9 +275,16 @@ async function showVideo(v, i, box, token) {
     return;
   }
   // Ссылка на файл в хранилище: браузер читает его по частям, а не целиком.
-  const url = URL.createObjectURL(blob.slice(0, blob.size, playableType(v)));
+  const type = playableType(v);
+  const url = URL.createObjectURL(blob.slice(0, blob.size, type));
   urls.push(url);
-  const video = h('video', { controls: true, playsinline: true, preload: 'metadata', src: url + '#t=0.001' });
+  // Сначала пробуем адрес, который обслуживает sw.js (так надёжнее на айфоне), потом прямую ссылку.
+  const sources = [url];
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    sources.unshift(`__video/${encodeURIComponent(v.id)}?type=${encodeURIComponent(type)}#t=0.001`);
+  }
+  let attempt = 0;
+  const video = h('video', { controls: true, playsinline: true, preload: 'metadata', src: sources[0] });
   const info = h('p', { class: 'muted' }, `Видео ${i + 1} · ${fmtSize(v.size)} · `,
     h('a', { href: url, download: v.name || 'video' }, 'Сохранить файл'));
   // Плеер показывается всегда. Сообщение появляется, только если видео не открылось или может не открыться.
@@ -285,10 +292,18 @@ async function showVideo(v, i, box, token) {
     ? h('p', { class: 'warn' }, `Это видео снято на айфон в формате HEVC. Если оно не показывается или идёт без картинки — файл цел. ${HEVC_HINT}`)
     : null;
   video.addEventListener('error', () => {
+    const code = video.error ? video.error.code : 0;
+    attempt++;
+    if (attempt < sources.length) {
+      video.src = sources[attempt];
+      video.load();
+      return;
+    }
     if (hint) hint.remove();
-    video.replaceWith(h('p', { class: 'warn' }, v.hevc
+    video.replaceWith(h('p', { class: 'warn' }, (v.hevc && !canPlayHevc()
       ? `Это видео снято на айфон в формате HEVC, и это устройство его не показывает. Файл цел. ${HEVC_HINT}`
-      : 'Это видео не открывается на этом устройстве. Файл цел: его можно сохранить и открыть другой программой.'));
+      : 'Это видео не открывается на этом устройстве. Файл цел: его можно сохранить и открыть другой программой.')
+      + ` (Код ошибки: ${code}.)`));
   });
   box.replaceChildren();
   add(box, [video, info, hint]);
@@ -773,7 +788,16 @@ async function start() {
 
   tidy().catch(() => { /* уборка необязательна, повторится при следующем запуске */ });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    // Если пришла новая версия приложения, спокойно предлагаем перезапуск. Сами ничего не перезагружаем.
+    const hadWorker = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker || document.querySelector('.update')) return;
+      document.body.prepend(h('p', { class: 'notice update', role: 'status' },
+        'Приложение обновилось. ', btn('Перезапустить', () => location.reload())));
+    });
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
 }
 
 start();
