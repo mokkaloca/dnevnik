@@ -31,9 +31,18 @@ export async function exportBackup(entries, onProgress) {
       }
       const file = `videos/${v.id}.${extOf(v)}`;
       files.push({ name: file, blob, crc });
-      vids.push({ id: v.id, name: v.name, type: v.type, size: v.size, hevc: !!v.hevc, file });
+      const item = { id: v.id, kind: v.kind || 'video', name: v.name, type: v.type, size: v.size, hevc: !!v.hevc, file };
+      const thumb = await db.metaGet('thumb:' + v.id);
+      if (thumb instanceof Blob) {
+        item.thumb = `thumbs/${v.id}.jpg`;
+        files.push({ name: item.thumb, blob: thumb, crc: await crc32OfBlob(thumb) });
+      }
+      vids.push(item);
     }
-    out.push({ id: e.id, date: e.date, text: e.text, createdAt: e.createdAt, updatedAt: e.updatedAt, videos: vids });
+    out.push({
+      id: e.id, date: e.date, text: e.text, tags: e.tags || [], starred: !!e.starred,
+      createdAt: e.createdAt, updatedAt: e.updatedAt, videos: vids,
+    });
   }
 
   const json = new Blob(
@@ -44,7 +53,8 @@ export async function exportBackup(entries, onProgress) {
 
   const zip = buildZip(files);
   const name = `dnevnik-${nowLocal().slice(0, 10)}.zip`;
-  return { file: new File([zip], name, { type: 'application/zip' }), entries: out.length, videos: files.length - 1, missing };
+  const media = out.reduce((sum, e) => sum + e.videos.length, 0);
+  return { file: new File([zip], name, { type: 'application/zip' }), entries: out.length, videos: media, missing };
 }
 
 function cleanEntry(raw) {
@@ -56,6 +66,8 @@ function cleanEntry(raw) {
     if (!v || !ID_RE.test(String(v.id || ''))) continue;
     videos.push({
       id: String(v.id),
+      kind: v.kind === 'audio' ? 'audio' : 'video',
+      thumb: typeof v.thumb === 'string' ? v.thumb : null,
       name: String(v.name || 'video').slice(0, 200),
       type: String(v.type || '').slice(0, 100),
       size: Number(v.size) || 0,
@@ -68,6 +80,8 @@ function cleanEntry(raw) {
     id: String(raw.id),
     date,
     text: typeof raw.text === 'string' ? raw.text : '',
+    tags: (Array.isArray(raw.tags) ? raw.tags : []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 40)).slice(0, 30),
+    starred: raw.starred === true,
     createdAt: Number(raw.createdAt) || now,
     updatedAt: Number(raw.updatedAt) || now,
     videos,
@@ -121,10 +135,16 @@ export async function importBackup(file, entries, onProgress) {
           await db.putVideo(v.id, blob);
           have.add(v.id);
           res.videos++;
-          if (v.hevc === null) v.hevc = await sniffHevc(blob);
+          if (v.hevc === null) v.hevc = v.kind === 'video' ? await sniffHevc(blob) : false;
           if (v.hevc) res.hevc = true;
+          if (v.thumb) {
+            try {
+              const thumb = await zip.blob(v.thumb, 'image/jpeg');
+              if (thumb) await db.metaSet('thumb:' + v.id, thumb);
+            } catch { /* без картинки в ленте можно обойтись */ }
+          }
         }
-        vids.push({ id: v.id, name: v.name, type: v.type, size: v.size, hevc: !!v.hevc });
+        vids.push({ id: v.id, kind: v.kind, name: v.name, type: v.type, size: v.size, hevc: !!v.hevc });
       }
       await db.putEntry({ ...e, videos: vids });
       const local = byId.get(e.id);

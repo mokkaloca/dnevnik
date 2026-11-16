@@ -59,18 +59,93 @@ export function plural(n, one, few, many) {
 
 const VIDEO_EXT = ['mov', 'mp4', 'm4v', 'webm', 'mkv', 'avi', '3gp', 'mpg', 'mpeg', 'wmv', 'ogv'];
 
+const AUDIO_EXT = ['m4a', 'mp3', 'wav', 'ogg', 'oga', 'aac', 'caf', 'weba', 'flac'];
+
+export const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+export const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+
 export function extOf(v) {
   const m = /\.([A-Za-z0-9]{1,5})$/.exec(v.name || '');
   if (m) return m[1].toLowerCase();
   const t = v.type || '';
+  if (t.startsWith('audio/')) return t.includes('webm') ? 'webm' : t.includes('ogg') ? 'ogg' : t.includes('mpeg') ? 'mp3' : 'm4a';
   if (t.includes('quicktime')) return 'mov';
   if (t.includes('webm')) return 'webm';
   return 'mp4';
 }
 
-export function isVideoFile(file) {
-  if ((file.type || '').startsWith('video/')) return true;
-  return VIDEO_EXT.includes(extOf(file)) && /\.[A-Za-z0-9]+$/.test(file.name || '');
+// 'video', 'audio' или null, если файл не подходит.
+export function mediaKind(file) {
+  const type = file.type || '';
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+  if (!/\.[A-Za-z0-9]+$/.test(file.name || '')) return null;
+  const ext = extOf(file);
+  if (VIDEO_EXT.includes(ext)) return 'video';
+  if (AUDIO_EXT.includes(ext)) return 'audio';
+  return null;
+}
+
+// Первая строка записи — заголовок, остальное — текст.
+export function splitText(text) {
+  const s = (text || '').trim();
+  const i = s.indexOf('\n');
+  return i < 0 ? [s, ''] : [s.slice(0, i).trim(), s.slice(i + 1).trim()];
+}
+
+function frameToBlob(video) {
+  const w = video.videoWidth;
+  const hgt = video.videoHeight;
+  if (!w || !hgt) return Promise.resolve(null);
+  const k = Math.min(1, 400 / Math.max(w, hgt));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * k);
+  c.height = Math.round(hgt * k);
+  try {
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.72));
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+
+// Маленький кадр из уже открытого плеера.
+export function thumbFromPlayer(video) {
+  return frameToBlob(video);
+}
+
+// Маленький кадр из видеофайла для ленты. Если не получилось — null, это не ошибка.
+export async function thumbFromFile(file, type) {
+  const url = URL.createObjectURL(file.slice(0, file.size, type));
+  const v = document.createElement('video');
+  v.muted = true;
+  v.playsInline = true;
+  v.preload = 'auto';
+  try {
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout')), 5000);
+      v.onloadeddata = () => { clearTimeout(t); resolve(); };
+      v.onerror = () => { clearTimeout(t); reject(new Error('error')); };
+      v.src = url;
+      const p = v.play();
+      if (p && p.then) p.then(() => v.pause()).catch(() => {});
+    });
+    if (v.duration > 1) {
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 1500);
+        v.onseeked = () => { clearTimeout(t); resolve(); };
+        v.currentTime = Math.min(1, v.duration / 4);
+      });
+    }
+    return await frameToBlob(v);
+  } catch {
+    return null;
+  } finally {
+    v.pause();
+    v.removeAttribute('src');
+    v.load();
+    URL.revokeObjectURL(url);
+  }
 }
 
 // Умеет ли это устройство показывать HEVC (формат видео айфона).
@@ -87,10 +162,11 @@ export function canPlayHevc() {
 
 // Под каким типом отдавать видео плееру. Вне Apple .mov лучше играется как mp4.
 export function playableType(v) {
-  let type = v.type || '';
+  let type = (v.type || '').split(';')[0];
   if (!type) {
     const ext = extOf(v);
-    type = ext === 'mov' ? 'video/quicktime' : ext === 'webm' ? 'video/webm' : 'video/mp4';
+    if (v.kind === 'audio') type = ext === 'webm' ? 'audio/webm' : ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg' : 'audio/mp4';
+    else type = ext === 'mov' ? 'video/quicktime' : ext === 'webm' ? 'video/webm' : 'video/mp4';
   }
   if (type === 'video/quicktime' && document.createElement('video').canPlayType('video/quicktime') === '') {
     type = 'video/mp4';

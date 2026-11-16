@@ -76,6 +76,7 @@ export function deleteEntry(id, videoIds = []) {
     for (const v of videoIds) {
       t.objectStore('videos').delete(v);
       t.objectStore('meta').delete('crc:' + v);
+      t.objectStore('meta').delete('thumb:' + v);
     }
   });
 }
@@ -103,6 +104,7 @@ export function deleteVideos(ids) {
     for (const id of ids) {
       t.objectStore('videos').delete(id);
       t.objectStore('meta').delete('crc:' + id);
+      t.objectStore('meta').delete('thumb:' + id);
     }
   });
 }
